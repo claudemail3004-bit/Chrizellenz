@@ -1,0 +1,252 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Chrizellenz Logo Reveal</title>
+<style>html,body{margin:0;background:#000}canvas{display:block}</style></head>
+<body><canvas id="c"></canvas>
+<script id="fs" type="x-shader/x-fragment">#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uTime; uniform int uSS;
+out vec4 outColor;
+
+// ---------- Chrizellenz logo geometry (measured from the master artwork, logo-pixel units, y up) ----------
+const vec2  C_CEN = vec2(-1.7, 0.0);
+const float C_R   = 365.6;   // centreline radius of the C stroke
+const float C_W   = 61.7;    // half stroke width
+const float C_END = 120.55;  // x of the C's flat terminals
+const vec2  O_CEN = vec2(-1.55, 0.15);
+const float O_R   = 236.5;
+const vec3 DOT[4] = vec3[4](vec3(247.7,188.85,52.0), vec3(361.7,36.35,59.4), vec3(311.0,-201.95,118.2), vec3(190.55,-365.4,37.5));
+const vec2 DOT_START[4] = vec2[4](vec2(470.,330.), vec2(640.,120.), vec2(700.,-300.), vec2(380.,-520.));
+const float LOGO_H = 854.5;
+const float LOGO_FRAC = 0.58; // logo height as fraction of frame height
+
+float ss(float a,float b,float x){return smoothstep(a,b,x);}
+float ease(float x){x=clamp(x,0.,1.);return x<.5?4.*x*x*x:1.-pow(-2.*x+2.,3.)/2.;}
+float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);vec2 u=f*f*(3.-2.*f);
+  return mix(mix(hash(i),hash(i+vec2(1,0)),u.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),u.x),u.y);}
+float fbm(vec2 p){float v=0.,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);for(int i=0;i<5;i++){v+=a*noise(p);p=m*p;a*=.5;}return v;}
+
+vec2 smin2(vec2 a, vec2 b, float k){ // smooth union carrying the profile radius
+  k=max(k,1e-3); float h=clamp(.5+.5*(b.x-a.x)/k,0.,1.);
+  return vec2(mix(b.x,a.x,h)-k*h*(1.-h), mix(b.y,a.y,h));
+}
+
+float sdC(vec2 q){
+  vec2 r=q-C_CEN;
+  if(r.x<0.) return abs(length(r)-C_R)-C_W;
+  return max(abs(abs(r.y)-C_R)-C_W, q.x-C_END);
+}
+
+vec2 ribbon(vec2 q,float t,float b,float tilt,float A1,float f1,float s1,float p1,float A2,float f2,float s2,float p2,float base,float dir,float t0,float life){
+  float x=q.x;
+  float a1=x*f1+t*s1+p1, a2=x*f2-t*s2+p2;
+  float y=b+tilt*x+A1*sin(a1)+A2*sin(a2);
+  float dy=tilt+A1*f1*cos(a1)+A2*f2*cos(a2);
+  float dist=abs(q.y-y)/sqrt(1.+dy*dy);
+  float w=base*(.35+.65*(.5+.5*sin(x*.004+t*1.1+p2*3.)));
+  float head = dir>0. ? (-1500.+1900.*(t-t0))-x : x-(1500.-1900.*(t-t0));
+  w*=ss(0.,450.,head)*life;
+  return vec2(dist-w, max(w,1.));
+}
+
+vec2 sceneRib(vec2 q,float t){
+  float life=ss(1.6,2.5,t)*(1.-ss(5.9,7.0,t));
+  vec2 res=vec2(1e4,1.);
+  if(life<=0.) return res;
+  q+=7.*vec2(sin(q.y*.011+t*2.1),cos(q.x*.009+t*1.7));
+  float grow=mix(.9,1.6,ss(3.,4.5,t));
+  res=smin2(res,ribbon(q,t,-430.,.10,90.,.0021,.7,2.,30.,.0075,1.1,4.,14.*grow,1.,1.75,life),22.);
+  res=smin2(res,ribbon(q,t,170.,-.16,130.,.0019,-.8,4.,40.,.0052,.9,2.,18.*grow,-1.,1.9,life),22.);
+  res=smin2(res,ribbon(q,t,-150.,.06,80.,.0030,1.2,1.,25.,.008,1.4,5.,9.*grow,-1.,2.1,life),22.);
+  res=smin2(res,ribbon(q,t,420.,-.05,70.,.0026,.6,3.,25.,.007,1.0,2.,8.*grow,1.,2.3,life),22.);
+  return res;
+}
+// returns (signed distance, profile radius)
+vec2 scene(vec2 q,float t){
+  float solid=ss(6.3,7.8,t);
+  float liq=1.-solid;
+  q+=liq*7.*vec2(sin(q.y*.011+t*2.1),cos(q.x*.009+t*1.7));
+  float k=mix(55.,.001,solid);
+
+  // --- the C: a liquid arc that hints at the form, then pulls into the exact C ---
+  float rot=.75*(1.-ease(ss(1.9,4.8,t)));
+  vec2 r=q-C_CEN; float ang=atan(r.y,r.x)-rot;
+  ang=mod(ang+3.14159265,6.2831853)-3.14159265;
+  float a=3.14159265-abs(ang);                 // 0 on the left, PI on the right
+  float e=mix(.25,2.95,ease(ss(1.75,3.5,t)));   // angular half-extent
+  float Rh=C_R+40.*(1.-ss(3.,5.,t))+22.*sin(ang*2.+t*1.6)*liq;
+  float wh=mix(2.,20.,ss(1.8,3.2,t))*ss(e,e-.9,a)*ss(1.65,2.2,t);
+  float dH=max(abs(length(r)-Rh)-wh,(a-e)*Rh);
+  float kC=ease(ss(3.5,5.1,t));
+  vec2 res=vec2(mix(dH,sdC(q),kC), mix(max(wh,1.),C_W,kC));
+
+  // --- inner circle: glass ring that fills into a solid disc ---
+  float kRing=ss(3.8,4.7,t);
+  if(kRing>0.){
+    float rc=mix(150.,O_R,ease(ss(3.8,5.8,t)));
+    float th=9.*kRing;
+    float kF=ease(ss(5.3,6.9,t));
+    float rin=mix(rc-2.*th,-20.,kF);
+    float l=length(q-O_CEN);
+    float dO=max(l-rc,rin-l);
+    res=smin2(res,vec2(dO,max(min((rc-max(rin,0.))*.5+kF*rc,rc),1.)),k);
+  }
+  // --- the four dots: bubbles drifting in, then locking into place ---
+  for(int i=0;i<4;i++){
+    float fi=float(i);
+    float ap=ss(3.7+.22*fi,4.5+.22*fi,t);
+    if(ap<=0.) continue;
+    float kd=ease(ss(4.7+.18*fi,6.9,t));
+    vec2 wob=vec2(sin(t*1.3+fi*2.),cos(t*1.1+fi*1.3))*30.*(1.-kd);
+    vec2 pc=mix(DOT_START[i]+wob,DOT[i].xy,kd);
+    float rr=DOT[i].z*mix(.55,1.,kd)*ap;
+    res=smin2(res,vec2(length(q-pc)-rr,max(rr,1.)),k);
+  }
+  // --- the lead ribbon of liquid chrome that feeds the C ---
+  float life=ss(1.6,2.5,t)*(1.-ss(5.9,7.0,t));
+  if(life>0.){
+    float grow=mix(.7,1.2,ss(3.,4.5,t));
+    res=smin2(res,ribbon(q,t,-250.,.26,120.,.0024,.9,0.,45.,.006,1.3,1.,22.*grow,1.,1.6,life),mix(45.,.001,ss(5.5,6.8,t)));
+  }
+  return res;
+}
+
+float prof(vec2 s,float t){
+  float R=mix(s.y,12.,ss(6.3,7.8,t));
+  float x=clamp(-s.x,0.,R);
+  return sqrt(max(R*R-(R-x)*(R-x),0.));
+}
+
+vec3 env(vec3 r,float t,float liq,vec2 q){
+  float sw=liq*(.9*sin(t*.8+q.x*.0025)+.5*sin(t*1.3-q.y*.003));
+  float cs=cos(sw),sn=sin(sw); r.xy=mat2(cs,sn,-sn,cs)*r.xy;
+  float y=r.y,x=r.x;
+  vec3 c=mix(vec3(.01,.02,.08),vec3(.40,.48,.75),ss(-.6,.05,y));
+  c=mix(c,vec3(1.,1.03,1.1),ss(.05,.7,y));
+  c+=vec3(1.,1.,1.1)*exp(-pow((y+.03)/.03,2.))*mix(.2,1.3,liq);
+  // moving softbox strips -> liquid chrome glints
+  float az=atan(x,r.z);
+  c+=vec3(.85,.9,1.2)*ss(.82,.97,cos(az*5.+t*1.4))*ss(-.3,.4,y)*liq*liq*1.1;
+  c+=vec3(.10,.26,.95)*ss(-.1,-.75,y)*.55;
+  c+=vec3(.5,.6,1.)*ss(.55,.9,abs(x))*(1.-abs(y))*.55;
+  c+=vec3(.50,.32,.95)*ss(.3,.9,-x)*liq*.55*ss(.3,-.2,y);
+  return c;
+}
+
+vec3 background(vec2 p,vec2 q,float t){
+  vec3 col=mix(vec3(0.,.006,.028),vec3(.004,.012,.045),ss(.9,0.,length(p*vec2(.8,1.2))));
+  // smoke
+  vec2 sp=p*1.7+vec2(-t*.07,t*.015);
+  vec2 w=vec2(fbm(sp+vec2(0.,t*.06)),fbm(sp+vec2(5.2,1.3)-t*.05));
+  float f=fbm(sp+2.4*w+vec2(t*.03,0.));
+  float dens=ss(.30,.85,f);
+  float leftMask=ss(.6,-.5,p.x+p.y*.4);
+  float lowBand=exp(-pow((p.y+.17)/.17,2.));
+  float region=mix(leftMask,1.,ss(1.4,2.8,t));
+  region=mix(region,lowBand,ss(6.2,8.0,t));
+  float amp=1.5*ss(.1,1.5,t)+1.0*ss(1.5,2.8,t);
+  amp*=mix(1.,.45,ss(6.2,8.0,t));
+  amp*=mix(1.,.12,ss(8.0,9.6,t));
+  vec3 sc=mix(vec3(.02,.10,.36),vec3(.16,.36,1.),ss(.5,.95,f));
+  sc=mix(sc,vec3(.30,.50,1.),pow(ss(.65,1.05,f),2.)*.8);
+  float vio=ss(1.6,2.6,t)*(1.-ss(4.3,6.2,t))*ss(.25,-.55,p.x)*ss(.2,-.4,p.y);
+  sc=mix(sc,vec3(.62,.54,1.15),vio*ss(.4,.75,w.x));
+  col+=sc*dens*region*amp;
+  // horizontal blue light streak of the reveal / finish
+  float kF=ss(6.7,7.8,t);
+  vec2 dq=(q-vec2(-430.,0.))/1000.;
+  float streak=exp(-abs(dq.y)*110.)*(exp(-abs(dq.x)*1.1)*.9+.25);
+  col+=vec3(.25,.42,.95)*streak*kF*.55;
+  // soft halo behind the logo at the end
+  col+=vec3(.02,.05,.16)*exp(-length(q)/650.)*ss(7.,9.,t);
+  return col;
+}
+
+vec3 render(vec2 fc,float t){
+  vec2 p=(fc-.5*uRes)/uRes.y;
+  float zoom=mix(1.07,1.,ease(ss(2.,8.6,t)));
+  float S=LOGO_FRAC/LOGO_H*zoom;
+  vec2 q=p/S;
+  float pxu=1./(uRes.y*S);
+  float solid=ss(6.3,7.8,t), liq=1.-solid;
+
+  vec3 bg=background(p,q,t);
+  vec3 col=bg;
+  vec2 sr=sceneRib(q,t);
+  float covR=clamp(.5-sr.x/pxu,0.,1.);
+  if(covR>0.){
+    float e=1.1;
+    float h0=prof(sr,t), hx=prof(sceneRib(q+vec2(e,0.),t),t), hy=prof(sceneRib(q+vec2(0.,e),t),t);
+    vec3 n=normalize(vec3(-vec2(hx-h0,hy-h0)/e,1.));
+    vec3 ec=env(reflect(vec3(0.,0.,-1.),n),t,1.,q);
+    float fres=pow(1.-n.z,1.4);
+    vec3 m=bg*vec3(.7,.8,1.2)+ec*(.18+1.3*fres)+vec3(.25,.4,1.)*fres*.8;
+    col=mix(col,m,covR);
+  }
+  bg=col;
+  vec2 s0=scene(q,t);
+  float cov=clamp(.5-s0.x/pxu,0.,1.);
+  if(cov>0.){
+    float e=1.1;
+    float h0=prof(s0,t);
+    float hx=prof(scene(q+vec2(e,0.),t),t);
+    float hy=prof(scene(q+vec2(0.,e),t),t);
+    vec2 g=vec2(hx-h0,hy-h0)/e;
+    vec3 n=normalize(vec3(-g+q*.00042,1.));
+    vec3 r=reflect(vec3(0.,0.,-1.),n);
+    vec3 ec=env(r,t,liq,q);
+    float fres=pow(1.-n.z,1.6);
+    vec3 glass=bg*vec3(.7,.8,1.2)+ec*(.10+1.1*fres)+vec3(.2,.35,1.)*fres*.6;
+    float chromeAmt=mix(.32,1.,ss(5.6,7.6,t));
+    vec3 m=mix(glass,ec*.95,chromeAmt);
+    // final satin finish: gently compress toward the storyboard's cool silver
+    m=mix(m,m*vec3(1.02,1.06,1.14)*1.25,solid);
+    // refined light sweep across the settled logo
+    float sx=mix(-1150.,1150.,ss(6.9,8.5,t));
+    float band=exp(-pow((q.x*.9+q.y*.42-sx)/80.,2.));
+    m+=vec3(.85,.9,1.)*band*.85*ss(6.8,7.1,t);
+    col=mix(bg,m,cov);
+  }
+  // outer glow when settled
+  col+=vec3(.06,.10,.28)*exp(-max(s0.x,0.)/30.)*(1.-cov)*solid*.35;
+  // flare core at the C's left edge
+  float kF=ss(6.7,7.8,t);
+  vec2 dq=(q-vec2(-429.,0.))/1000.;
+  float core=exp(-length(dq*vec2(.8,2.4))*30.);
+  float twinkle=1.+.06*sin(t*7.);
+  col+=(vec3(.55,.70,1.)*core*1.1+vec3(.5,.65,1.)*exp(-abs(dq.y)*260.)*exp(-abs(dq.x)*4.)*.5)*kF*twinkle;
+  return col;
+}
+
+void main(){
+  vec3 acc=vec3(0.);
+  float n=float(uSS);
+  for(int i=0;i<4;i++){ if(i>=uSS*uSS) break;
+    vec2 o=(vec2(float(i%uSS),float(i/uSS))+.5)/n-.5;
+    acc+=render(gl_FragCoord.xy+o,uTime);
+  }
+  vec3 col=acc/(n*n);
+  col=1.-exp(-col*1.15);                        // filmic shoulder
+  vec2 p=(gl_FragCoord.xy-.5*uRes)/uRes.y;
+  col*=mix(1.,.72,ss(.45,1.05,length(p*vec2(.85,1.))));
+  col+=(hash(gl_FragCoord.xy+fract(uTime*13.1)*100.)-.5)*.018;   // fine grain
+  col*=ss(0.,.45,uTime);                         // open from black
+  outColor=vec4(max(col,0.),1.);
+}
+</script>
+<script>
+const W=+(new URLSearchParams(location.search).get('w')||1920), H=Math.round(W*9/16);
+const c=document.getElementById('c'); c.width=W; c.height=H;
+const gl=c.getContext('webgl2',{preserveDrawingBuffer:true,antialias:false});
+function sh(t,s){const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw gl.getShaderInfoLog(o);return o;}
+const pr=gl.createProgram();
+gl.attachShader(pr,sh(gl.VERTEX_SHADER,'#version 300 es\nin vec2 a;void main(){gl_Position=vec4(a,0,1);}'));
+gl.attachShader(pr,sh(gl.FRAGMENT_SHADER,document.getElementById('fs').textContent.trim()));
+gl.linkProgram(pr);gl.useProgram(pr);
+const b=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,b);
+gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+gl.enableVertexAttribArray(0);gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+const uR=gl.getUniformLocation(pr,'uRes'),uT=gl.getUniformLocation(pr,'uTime'),uS=gl.getUniformLocation(pr,'uSS');
+window.draw=(t,ss=2)=>{gl.viewport(0,0,W,H);gl.uniform2f(uR,W,H);gl.uniform1f(uT,t);gl.uniform1i(uS,ss);gl.drawArrays(gl.TRIANGLE_STRIP,0,4);gl.finish();return c.toDataURL('image/png');};
+if(!navigator.webdriver){let t0=performance.now();(function loop(){const t=((performance.now()-t0)/1000)%11;draw(t,1);requestAnimationFrame(loop);})();}
+</script></body></html>
